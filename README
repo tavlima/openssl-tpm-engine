@@ -33,6 +33,7 @@ create_tpm_key
                 -e|--enc-scheme encryption scheme to use [PKCSV15] or OAEP
                 -q|--sig-scheme signature scheme to use [DER] or SHA1
                 -s|--key-size   key size in bits [2048]
+		-z|--well-known use "well known" SRK secret
                 -a|--auth       require a password for the key [NO]
                 -p|--popup      use TSS GUI popup dialogs to get the password
 				for the key [NO] (implies --auth)

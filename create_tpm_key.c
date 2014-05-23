@@ -54,6 +54,7 @@ static struct option long_options[] = {
 	{"enc-scheme", 1, 0, 'e'},
 	{"sig-scheme", 1, 0, 'q'},
 	{"key-size", 1, 0, 's'},
+	{"well-known", 0, 0, 'z'},
 	{"auth", 0, 0, 'a'},
 	{"popup", 0, 0, 'p'},
 	{"wrap", 1, 0, 'w'},
@@ -70,6 +71,7 @@ usage(char *argv0)
 		"\t\t-e|--enc-scheme  encryption scheme to use [PKCSV15] or OAEP\n"
 		"\t\t-q|--sig-scheme  signature scheme to use [DER] or SHA1\n"
 		"\t\t-s|--key-size    key size in bits [2048]\n"
+		"\t\t-z|--well-known  use \"well known\" SRK secret\n"
 		"\t\t-a|--auth        require a password for the key [NO]\n"
 		"\t\t-p|--popup       use TSS GUI popup dialogs to get the password "
 		"for the\n\t\t\t\t key [NO] (implies --auth)\n"
@@ -146,7 +148,7 @@ int main(int argc, char **argv)
 	unsigned char	*blob_asn1 = NULL;
 	int		asn1_len;
 	char		*filename, c, *openssl_key = NULL;
-	int		option_index, auth = 0, popup = 0, wrap = 0;
+	int		option_index, auth = 0, popup = 0, wrap = 0, well_known = 0;
 	UINT32		enc_scheme = TSS_ES_RSAESPKCSV15;
 	UINT32		sig_scheme = TSS_SS_RSASSAPKCS1V15_DER;
 	UINT32		key_size = 2048;
@@ -154,7 +156,7 @@ int main(int argc, char **argv)
 
 	while (1) {
 		option_index = 0;
-		c = getopt_long(argc, argv, "pe:q:s:ahw:",
+		c = getopt_long(argc, argv, "pe:q:s:azhw:",
 				long_options, &option_index);
 		if (c == -1)
 			break;
@@ -193,6 +195,9 @@ int main(int argc, char **argv)
 				initFlags |= TSS_KEY_MIGRATABLE;
 				wrap = 1;
 				openssl_key = optarg;
+				break;
+			case 'z':
+				well_known = 1;
 				break;
 			default:
 				usage(argv[0]);
@@ -292,42 +297,58 @@ int main(int argc, char **argv)
 	}
 
 	if (srk_authusage) {
-		char *authdata = calloc(1, 128);
-
-		if (!authdata) {
-			fprintf(stderr, "malloc failed.\n");
-			Tspi_Context_Close(hContext);
-			exit(result);
-		}
 
 		if ((result = Tspi_GetPolicyObject(hSRK, TSS_POLICY_USAGE,
 						   &srkUsagePolicy))) {
 			print_error("Tspi_GetPolicyObject", result);
 			Tspi_Context_CloseObject(hContext, hKey);
 			Tspi_Context_Close(hContext);
-			free(authdata);
 			exit(result);
 		}
 
-		if (EVP_read_pw_string(authdata, 128, "SRK Password: ", 0)) {
-			Tspi_Context_CloseObject(hContext, hKey);
-			Tspi_Context_Close(hContext);
-			free(authdata);
-			exit(result);
-		}
+		if (well_known) {
 
-		//Set Secret
-		if ((result = Tspi_Policy_SetSecret(srkUsagePolicy,
+			BYTE well_known_secret[] = TSS_WELL_KNOWN_SECRET;
+
+			//Set Well Known Secret
+			if ((result = Tspi_Policy_SetSecret(srkUsagePolicy,
+							TSS_SECRET_MODE_SHA1,
+							sizeof(well_known_secret),
+							(BYTE *)well_known_secret))) {
+				print_error("Tspi_Policy_SetSecret", result);
+				Tspi_Context_Close(hContext);
+				exit(result);
+			}
+		} else {
+
+			char *authdata = calloc(1, 128);
+
+			if (!authdata) {
+				fprintf(stderr, "malloc failed.\n");
+				Tspi_Context_Close(hContext);
+				exit(result);
+			}
+
+			if (EVP_read_pw_string(authdata, 128, "SRK Password: ", 0)) {
+				Tspi_Context_CloseObject(hContext, hKey);
+				Tspi_Context_Close(hContext);
+				free(authdata);
+				exit(result);
+			}
+
+			//Set Secret
+			if ((result = Tspi_Policy_SetSecret(srkUsagePolicy,
 						    TSS_SECRET_MODE_PLAIN,
 						    strlen(authdata),
 						    (BYTE *)authdata))) {
-			print_error("Tspi_Policy_SetSecret", result);
-			free(authdata);
-			Tspi_Context_Close(hContext);
-			exit(result);
-		}
+				print_error("Tspi_Policy_SetSecret", result);
+				free(authdata);
+				Tspi_Context_Close(hContext);
+				exit(result);
+			}
 
-		free(authdata);
+			free(authdata);
+		}
 	}
 
 	if (auth) {

@@ -23,3 +23,4 @@ engine_id = tpm
 default_algorithms = ALL
 #default_algorithms = RAND,RSA
 init = 1
+#SRK_WELL_KNOWN = 1

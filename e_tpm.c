@@ -72,6 +72,7 @@ static void tpm_rand_seed(const void *, int);
 #define TPM_CMD_SO_PATH		ENGINE_CMD_BASE
 #define TPM_CMD_PIN		ENGINE_CMD_BASE+1
 #define TPM_CMD_SECRET_MODE	ENGINE_CMD_BASE+2
+#define TPM_CMD_SRK_WELL_KNOWN	ENGINE_CMD_BASE+3
 static const ENGINE_CMD_DEFN tpm_cmd_defns[] = {
 	{TPM_CMD_SO_PATH,
 	 "SO_PATH",
@@ -84,6 +85,10 @@ static const ENGINE_CMD_DEFN tpm_cmd_defns[] = {
 	{TPM_CMD_SECRET_MODE,
 	 "SECRET_MODE",
 	 "The TSS secret mode for all secrets",
+	 ENGINE_CMD_FLAG_NUMERIC},
+	{TPM_CMD_SRK_WELL_KNOWN,
+	 "SRK_WELL_KNOWN",
+	 "The TSS SRK key is well known",
 	 ENGINE_CMD_FLAG_NUMERIC},
 	{0, NULL, NULL, 0}
 };
@@ -128,6 +133,7 @@ static TSS_HPOLICY  hSRKPolicy  = NULL_HPOLICY;
 static TSS_HTPM     hTPM        = NULL_HTPM;
 static TSS_UUID     SRK_UUID    = TSS_UUID_SRK;
 static UINT32       secret_mode = TSS_SECRET_MODE_PLAIN;
+static UINT32       srk_zeroed  = 0;
 
 /* varibles used to get/set CRYPTO_EX_DATA values */
 int  ex_app_data = TPM_ENGINE_EX_DATA_UNINIT;
@@ -248,6 +254,9 @@ int tpm_load_srk(UI_METHOD *ui, void *cb_data)
 	TSS_RESULT result;
 	UINT32 authusage;
 	BYTE *auth;
+	UINT32 auth_size;
+	UINT32 srk_secret_mode = secret_mode;
+	BYTE well_known_secret[] = TSS_WELL_KNOWN_SECRET;
 
 	if (hSRK != NULL_HKEY) {
 		DBGFN("SRK is already loaded.");
@@ -299,18 +308,24 @@ int tpm_load_srk(UI_METHOD *ui, void *cb_data)
 		return 0;
 	}
 
-	if (!tpm_engine_get_auth(ui, (char *)auth, 128, "SRK authorization: ",
-				cb_data)) {
-		Tspi_Context_CloseObject(hContext, hSRK);
-		free(auth);
-		TSSerr(TPM_F_TPM_LOAD_SRK, TPM_R_REQUEST_FAILED);
-		return 0;
+	if (!srk_zeroed) {
+		if (!tpm_engine_get_auth(ui, (char *)auth, 128, "SRK authorization: ",
+					cb_data)) {
+			Tspi_Context_CloseObject(hContext, hSRK);
+			free(auth);
+			TSSerr(TPM_F_TPM_LOAD_SRK, TPM_R_REQUEST_FAILED);
+		}
+		auth_size = strlen((char *)auth);
+	} else {
+		auth_size = sizeof(well_known_secret);
+		memcpy(auth, well_known_secret, auth_size);
+		srk_secret_mode = TSS_SECRET_MODE_SHA1;
 	}
 
 	/* secret_mode is a global that may be set by engine ctrl
 	 * commands.  By default, its set to TSS_SECRET_MODE_PLAIN */
-	if ((result = Tspi_Policy_SetSecret(hSRKPolicy, secret_mode,
-					      strlen((char *)auth), auth))) {
+	if ((result = Tspi_Policy_SetSecret(hSRKPolicy, srk_secret_mode,
+					      auth_size, auth))) {
 		Tspi_Context_CloseObject(hContext, hSRK);
 		free(auth);
 		TSSerr(TPM_F_TPM_LOAD_SRK, TPM_R_REQUEST_FAILED);
@@ -775,6 +790,9 @@ static int tpm_engine_ctrl(ENGINE * e, int cmd, long i, void *p, void (*f) ())
 					return 0;
 					break;
 			}
+			return 1;
+		case TPM_CMD_SRK_WELL_KNOWN:
+			srk_zeroed = (UINT32)i;
 			return 1;
 		case TPM_CMD_PIN:
 			return tpm_create_srk_policy(p);
